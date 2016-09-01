@@ -79,6 +79,10 @@ extern int setenv(const char *name, const char *value, int overwrite);
 // Useful for accelerating the test suite.
 static int single_shot_mode = 0;
 
+// In single task mode, do not accept new tasks after the first one has
+// completed. Useful when workers run as frequently scheduled microservices.
+static int single_task_mode = 0;
+
 // Maximum time to stay connected to a single master without any work.
 static int idle_timeout = 900;
 
@@ -191,6 +195,9 @@ static struct list   *procs_waiting = NULL;
 static struct itable *procs_complete = NULL;
 
 static int results_to_be_sent_msg = 0;
+
+// In single task mode this signals that we should not accept new tasks.
+static int accept_no_more_tasks = 0;
 
 static timestamp_t total_task_execution_time = 0;
 static int total_tasks_executed = 0;
@@ -1513,7 +1520,11 @@ static void work_for_master(struct link *master) {
 			}
 		}
 
-		if(ok) {
+		if(ok && single_task_mode && (itable_size(procs_complete) > 0 || accept_no_more_tasks)) {
+			debug(D_WQ, "single task mode: not looking for new tasks");
+			accept_no_more_tasks = 1;
+		}
+		else if(ok) {
 			int visited = 0;
 			while(list_size(procs_waiting) > visited && cores_allocated < local_resources->cores.total) {
 				struct work_queue_process *p;
@@ -1547,7 +1558,7 @@ static void work_for_master(struct link *master) {
 		if(!ok) break;
 
 		//Reset idle_stoptime if something interesting is happening at this worker.
-		if(list_size(procs_waiting) > 0 || itable_size(procs_table) > 0 || itable_size(procs_complete) > 0) {
+		if(!accept_no_more_tasks && (list_size(procs_waiting) > 0 || itable_size(procs_table) > 0 || itable_size(procs_complete) > 0)) {
 			reset_idle_timer();
 		}
 	}
@@ -1904,6 +1915,7 @@ static void show_help(const char *cmd)
 	printf( " %-30s Set the maximum number of seconds the worker may be active. (in s).\n", "--wall-time=<s>");
 	printf( " %-30s Forbid the use of symlinks for cache management.\n", "--disable-symlinks");
 	printf(" %-30s Single-shot mode -- quit immediately after disconnection.\n", "--single-shot");
+	printf(" %-30s Single-task mode -- execute only one task then wait until --idle-timeout before terminating.\n", "--single-task");
 	printf(" %-30s docker mode -- run each task with a container based on this docker image.\n", "--docker=<image>");
 	printf(" %-30s docker-preserve mode -- tasks execute by a worker share a container based on this docker image.\n", "--docker-preserve=<image>");
 	printf(" %-30s docker-tar mode -- build docker image from tarball, this mode must be used with --docker or --docker-preserve.\n", "--docker-tar=<tarball>");
@@ -1914,7 +1926,8 @@ enum {LONG_OPT_DEBUG_FILESIZE = 256, LONG_OPT_VOLATILITY, LONG_OPT_BANDWIDTH,
 	  LONG_OPT_DEBUG_RELEASE, LONG_OPT_SPECIFY_LOG, LONG_OPT_CORES, LONG_OPT_MEMORY,
 	  LONG_OPT_DISK, LONG_OPT_GPUS, LONG_OPT_FOREMAN, LONG_OPT_FOREMAN_PORT, LONG_OPT_DISABLE_SYMLINKS,
 	  LONG_OPT_IDLE_TIMEOUT, LONG_OPT_CONNECT_TIMEOUT, LONG_OPT_RUN_DOCKER, LONG_OPT_RUN_DOCKER_PRESERVE,
-	  LONG_OPT_BUILD_FROM_TAR, LONG_OPT_SINGLE_SHOT, LONG_OPT_WALL_TIME, LONG_OPT_DISK_ALLOCATION};
+	  LONG_OPT_BUILD_FROM_TAR, LONG_OPT_SINGLE_SHOT, LONG_OPT_WALL_TIME, LONG_OPT_DISK_ALLOCATION,
+	  LONG_OPT_SINGLE_TASK};
 
 static const struct option long_options[] = {
 	{"advertise",           no_argument,        0,  'a'},
@@ -1939,6 +1952,7 @@ static const struct option long_options[] = {
 	{"min-backoff",         required_argument,  0,  'i'},
 	{"max-backoff",         required_argument,  0,  'b'},
 	{"single-shot",		    no_argument,        0,  LONG_OPT_SINGLE_SHOT },
+	{"single-task",			no_argument,        0,  LONG_OPT_SINGLE_TASK },
 	{"disable-symlinks",    no_argument,        0,  LONG_OPT_DISABLE_SYMLINKS},
 	{"disk-threshold",      required_argument,  0,  'z'},
 	{"arch",                required_argument,  0,  'A'},
@@ -2149,6 +2163,9 @@ int main(int argc, char *argv[])
 			break;
 		case LONG_OPT_SINGLE_SHOT:
 			single_shot_mode = 1;
+			break;
+		case LONG_OPT_SINGLE_TASK:
+			single_task_mode = 1;
 			break;
 		case 'h':
 			show_help(argv[0]);
