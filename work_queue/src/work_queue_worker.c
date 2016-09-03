@@ -1520,9 +1520,8 @@ static void work_for_master(struct link *master) {
 			}
 		}
 
-		if(ok && single_task_mode && (itable_size(procs_complete) > 0 || accept_no_more_tasks)) {
-			debug(D_WQ, "single task mode: not looking for new tasks");
-			accept_no_more_tasks = 1;
+		if(ok && accept_no_more_tasks && total_tasks_executed) {
+			debug(D_WQ, "single task mode: task finished, waiting to time out");
 		}
 		else if(ok) {
 			int visited = 0;
@@ -1532,6 +1531,10 @@ static void work_for_master(struct link *master) {
 				p = list_pop_head(procs_waiting);
 				if(p && check_for_resources(p->task)) {
 					start_process(p);
+					if (single_task_mode) {
+						accept_no_more_tasks = 1;
+						break;
+					}
 				} else {
 					list_push_tail(procs_waiting, p);
 					visited++;
@@ -1558,7 +1561,7 @@ static void work_for_master(struct link *master) {
 		if(!ok) break;
 
 		//Reset idle_stoptime if something interesting is happening at this worker.
-		if(!accept_no_more_tasks && (list_size(procs_waiting) > 0 || itable_size(procs_table) > 0 || itable_size(procs_complete) > 0)) {
+		if(!total_tasks_executed && (list_size(procs_waiting) > 0 || itable_size(procs_table) > 0 || itable_size(procs_complete) > 0)) {
 			reset_idle_timer();
 		}
 	}
